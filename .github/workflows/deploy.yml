@@ -1,6 +1,8 @@
 name: Update and deploy calendar
 
 on:
+  push:
+    branches: [main]     # 每次推送自动重新生成并部署
   schedule:
     - cron: "0 22 * * *"   # 每天 UTC 22:00 = 北京时间 6:00
     - cron: "0 10 * * *"   # 每天 UTC 10:00 = 北京时间 18:00
