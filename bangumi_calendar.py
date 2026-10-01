@@ -136,11 +136,31 @@ def fold_line(line: str) -> str:
     return "\r\n".join(out)
 
 
+def format_ep_ranges(nums: list) -> str:
+    """把集号列表格式化为范围：[1,2,3,4] -> 'EP1～4'；[1,3,5] -> 'EP1、EP3、EP5'。"""
+    nums = sorted(set(nums))
+    parts, i = [], 0
+    while i < len(nums):
+        j = i
+        while j + 1 < len(nums) and nums[j + 1] == nums[j] + 1:
+            j += 1
+        if j - i >= 1:
+            parts.append(f"EP{nums[i]}～{nums[j]}")
+        else:
+            parts.append(f"EP{nums[i]}")
+        i = j + 1
+    return "、".join(parts)
+
+
 def build_events(subjects: list, air_times: dict, today: date) -> list:
-    """生成 [(dtstart, all_day, summary, description, uid)] 列表。"""
+    """生成 [(dtstart, all_day, summary, description, uid)] 列表。
+
+    同一部动画同一天播出的多集合并为一个事件。
+    """
     lo, hi = today - timedelta(days=DAYS_BACK), today + timedelta(days=DAYS_FORWARD)
     events = []
-    seen_uids = set()
+    # (subject_id, 事件日期) -> [分集]
+    grouped = {}
 
     for subj in subjects:
         sid = subj["subject_id"]
@@ -160,29 +180,33 @@ def build_events(subjects: list, air_times: dict, today: date) -> list:
             if ad is None or not (lo <= ad <= hi):
                 continue
             event_date = ad + timedelta(days=DAY_OFFSET)  # 偏移到第二天（或指定天数）
-            ep_no = ep.get("sort") or ep.get("ep") or "?"
-            ep_title = ep.get("name_cn") or ep.get("name") or ""
-            summary = f"{title} EP{ep_no}"
-            desc_parts = []
-            if orig and orig != title:
-                desc_parts.append(orig)
-            if ep_title:
-                desc_parts.append(ep_title)
-            desc_parts.append(f"https://bgm.tv/subject/{sid}/ep{ep.get('id', '')}")
-            desc = " | ".join(desc_parts)
-            uid = f"bgm-{sid}-{ep.get('id', ep_no)}@bangumi-ical"
-            if uid in seen_uids:
-                continue
-            seen_uids.add(uid)
-
-            if air_time:
-                hh, mm = (int(x) for x in air_time.split(":")[:2])
-                dtstart = datetime(event_date.year, event_date.month, event_date.day, hh, mm)
-                events.append((dtstart, False, summary, desc, uid))
-            else:
-                events.append((event_date, True, summary, desc, uid))
+            grouped.setdefault((sid, event_date, title, orig, air_time), []).append(ep)
 
         time.sleep(0.3)
+
+    for (sid, event_date, title, orig, air_time), day_eps in grouped.items():
+        day_eps.sort(key=lambda e: e.get("sort") or e.get("ep") or 0)
+        nums = [e.get("sort") or e.get("ep") or 0 for e in day_eps]
+        summary = f"{title} {format_ep_ranges(nums)}".strip()
+
+        desc_parts = []
+        if orig and orig != title:
+            desc_parts.append(orig)
+        for ep in day_eps:
+            ep_no = ep.get("sort") or ep.get("ep") or "?"
+            ep_title = ep.get("name_cn") or ep.get("name") or ""
+            if ep_title:
+                desc_parts.append(f"EP{ep_no} {ep_title}")
+        desc_parts.append(f"https://bgm.tv/subject/{sid}")
+        desc = " | ".join(desc_parts)
+        uid = f"bgm-{sid}-{event_date.isoformat()}@bangumi-ical"
+
+        if air_time:
+            hh, mm = (int(x) for x in air_time.split(":")[:2])
+            dtstart = datetime(event_date.year, event_date.month, event_date.day, hh, mm)
+            events.append((dtstart, False, summary, desc, uid))
+        else:
+            events.append((event_date, True, summary, desc, uid))
 
     return events
 
