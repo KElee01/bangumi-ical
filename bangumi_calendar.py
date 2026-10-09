@@ -39,6 +39,11 @@ DAY_OFFSET = int(os.environ.get("DAY_OFFSET", "1"))
 # 收藏类型: 1=想看, 3=在看（Bangumi API 定义，subject_type=2 为动画）
 COLLECTION_TYPES = {"1": "想看", "3": "在看"}
 
+# 是否扫描「看过」条目的续集/特别篇/剧场版等关联新番（1=开启，0=关闭）
+INCLUDE_SEQUELS = os.environ.get("INCLUDE_SEQUELS", "1") == "1"
+# 关联条目仅保留播出日期为空或在此天数内的（即即将播出/正在播出），避免老番关联刷屏
+SEQUEL_WINDOW_DAYS = int(os.environ.get("SEQUEL_WINDOW_DAYS", "45"))
+
 
 def http_get_json(path: str, retries: int = 3) -> object:
     """请求 Bangumi API 并返回 JSON，带简单重试。"""
@@ -180,11 +185,12 @@ def build_events(subjects: list, air_times: dict, today: date) -> list:
             if ad is None or not (lo <= ad <= hi):
                 continue
             event_date = ad + timedelta(days=DAY_OFFSET)  # 偏移到第二天（或指定天数）
-            grouped.setdefault((sid, event_date, title, orig, air_time), []).append(ep)
+            src = info.get("_source", "")
+            grouped.setdefault((sid, event_date, title, orig, src, air_time), []).append(ep)
 
         time.sleep(0.3)
 
-    for (sid, event_date, title, orig, air_time), day_eps in grouped.items():
+    for (sid, event_date, title, orig, src, air_time), day_eps in grouped.items():
         day_eps.sort(key=lambda e: e.get("sort") or e.get("ep") or 0)
         nums = [e.get("sort") or e.get("ep") or 0 for e in day_eps]
         summary = f"{title} {format_ep_ranges(nums)}".strip()
@@ -192,6 +198,8 @@ def build_events(subjects: list, air_times: dict, today: date) -> list:
         desc_parts = []
         if orig and orig != title:
             desc_parts.append(orig)
+        if src:
+            desc_parts.append(src)
         for ep in day_eps:
             ep_no = ep.get("sort") or ep.get("ep") or "?"
             ep_title = ep.get("name_cn") or ep.get("name") or ""
@@ -261,6 +269,41 @@ def main():
         time.sleep(0.3)
 
     print(f"用户 {uid}: {'、'.join(type_names)}，共 {len(subjects)} 个条目")
+
+    # 扫描「看过」条目的关联新番（续集/特别篇/剧场版等）
+    if INCLUDE_SEQUELS:
+        watched = fetch_collections(uid, "2")
+        known_ids = {s["subject_id"] for s in subjects} | {c["subject_id"] for c in watched}
+        seen_rel, added = set(), 0
+        for c in watched:
+            sid = c["subject_id"]
+            winfo = c.get("subject") or {}
+            wtitle = winfo.get("name_cn") or winfo.get("name") or f"subject {sid}"
+            try:
+                rels = http_get_json(f"/v0/subjects/{sid}/subjects")
+            except Exception as e:  # noqa: BLE001
+                print(f"[warn] 条目 {sid}《{wtitle}》关联获取失败，跳过: {e}", file=sys.stderr)
+                continue
+            for rel in rels:
+                rid = rel.get("id")
+                if not rid or rid in known_ids or rid in seen_rel:
+                    continue
+                if rel.get("type") != 2:  # 仅动画
+                    continue
+                d = parse_airdate(rel.get("date") or "")
+                if d is None or d >= today - timedelta(days=SEQUEL_WINDOW_DAYS):
+                    seen_rel.add(rid)
+                    subjects.append({
+                        "subject_id": rid,
+                        "subject": {
+                            "name": rel.get("name", ""),
+                            "name_cn": rel.get("name_cn", ""),
+                            "_source": f"承接《{wtitle}》（{rel.get('relation', '')}）",
+                        },
+                    })
+                    added += 1
+            time.sleep(0.25)
+        print(f"从「看过」{len(watched)} 部中找出 {added} 个续集/特别篇等新条目")
 
     air_times = fetch_calendar()
     print(f"每日放送匹配到 {len(air_times)} 个条目的具体播出时刻")

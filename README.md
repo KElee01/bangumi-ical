@@ -40,6 +40,7 @@ BANGUMI_PROXY=http://127.0.0.1:7897 python3 bangumi_calendar.py
 ## 工作原理
 
 - 拉取用户动画收藏：`type=1 想看` + `type=3 在看`
+- 另扫描「看过」条目的关联条目（续集/番外篇/特别篇/剧场版/OVA 等），凡为动画且播出日期为空或近 `SEQUEL_WINDOW_DAYS` 天内的（即将/正在播出）一并纳入；已在想看/在看/看过中的条目自动去重
 - 逐条目拉取正片分集（type=0）的 `airdate`
 - 已播出超过 `DAYS_BACK`（默认 14 天）或日期未知的分集不生成事件
 - 事件为**全天事件**（Bangumi API 的分集 `airdate` 只有日期；旧版每日放送接口的 `time` 字段已不再返回数据，故无法给出具体时刻）
@@ -54,6 +55,8 @@ BANGUMI_PROXY=http://127.0.0.1:7897 python3 bangumi_calendar.py
 | `DAYS_BACK` | `14` | 已播出分集保留天数 |
 | `DAYS_FORWARD` | `180` | 未来展望天数 |
 | `DAY_OFFSET` | `1` | 事件相对播出日期偏移天数（+1 = 设到第二天，深夜档实际观看日在次日；设 `0` 恢复原样） |
+| `INCLUDE_SEQUELS` | `1` | 是否把「看过」条目的续集/特别篇等关联新番纳入日历（`0` 关闭） |
+| `SEQUEL_WINDOW_DAYS` | `45` | 关联新番的播出日期须在未来、或已开播不超过此天数 |
 
 ## 更新频率
 
