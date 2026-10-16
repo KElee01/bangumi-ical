@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 
@@ -45,23 +46,35 @@ INCLUDE_SEQUELS = os.environ.get("INCLUDE_SEQUELS", "1") == "1"
 SEQUEL_WINDOW_DAYS = int(os.environ.get("SEQUEL_WINDOW_DAYS", "45"))
 
 
-def http_get_json(path: str, retries: int = 3) -> object:
-    """请求 Bangumi API 并返回 JSON，带简单重试。"""
+def http_get_json(path: str) -> object:
+    """请求 Bangumi API 并返回 JSON。
+
+    重试策略：
+    - 4xx（除 429）为客户端错误，立即失败不重试
+    - 429/5xx/网络错误为瞬时故障，指数退避重试 5 次（2/5/10/20/40 秒，共约 77 秒）
+    """
     url = f"{API_BASE}{path}"
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({"http": BANGUMI_PROXY, "https": BANGUMI_PROXY})
         if BANGUMI_PROXY else urllib.request.ProxyHandler({})
     )
+    backoffs = [2, 5, 10, 20, 40]
     last_err = None
-    for attempt in range(retries):
+    for attempt, wait in enumerate([0] + backoffs):
+        if wait:
+            print(f"[retry] 第 {attempt} 次失败，{wait}s 后重试: {url} -> {last_err}", file=sys.stderr)
+            time.sleep(wait)
         try:
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with opener.open(req, timeout=20) as resp:
+            with opener.open(req, timeout=30) as resp:
                 return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if 400 <= e.code < 500 and e.code != 429:
+                raise RuntimeError(f"请求失败（客户端错误，不重试）: {url} -> HTTP {e.code}") from e
+            last_err = e
         except Exception as e:  # noqa: BLE001
             last_err = e
-            time.sleep(2 * (attempt + 1))
-    raise RuntimeError(f"请求失败: {url} -> {last_err}")
+    raise RuntimeError(f"请求失败（已重试 {len(backoffs)} 次）: {url} -> {last_err}")
 
 
 def fetch_collections(uid: str, ctype: str) -> list:

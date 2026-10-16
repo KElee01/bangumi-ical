@@ -28,7 +28,12 @@ jobs:
           python-version: "3.12"
 
       - name: Generate ICS
-        run: python bangumi_calendar.py
+        run: |
+          python bangumi_calendar.py || {
+            echo "::warning::第一次生成失败（可能是 Bangumi API 瞬时故障），5 分钟后整跑重试"
+            sleep 300
+            python bangumi_calendar.py
+          }
         env:
           BANGUMI_UID: "463198"
 
